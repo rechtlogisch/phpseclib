@@ -234,6 +234,13 @@ class X509
     private $extensionValues = [];
 
     /**
+     * Extensions queued for inclusion when signing a new certificate.
+     *
+     * @var list<array{id: string, value: mixed, critical: bool}>
+     */
+    private $pendingExtensions = [];
+
+    /**
      * OIDs loaded
      *
      * @var bool
@@ -2713,6 +2720,10 @@ class X509
 
         $this->currentCert['tbsCertificate']['issuer'] = $issuer->dn;
 
+        if (isset($subject->currentKeyIdentifier)) {
+            $this->setExtension('id-ce-subjectKeyIdentifier', $subject->currentKeyIdentifier);
+        }
+
         if (isset($issuer->currentKeyIdentifier)) {
             $this->setExtension('id-ce-authorityKeyIdentifier', [
                     //'authorityCertIssuer' => array(
@@ -2729,9 +2740,10 @@ class X509
             //unset($extensions);
         }
 
-        if (isset($subject->currentKeyIdentifier)) {
-            $this->setExtension('id-ce-subjectKeyIdentifier', $subject->currentKeyIdentifier);
+        foreach ($this->pendingExtensions as $extension) {
+            $this->setExtension($extension['id'], $extension['value'], $extension['critical']);
         }
+        $this->pendingExtensions = [];
 
         $altName = [];
 
@@ -3171,6 +3183,18 @@ class X509
     public function makeCA()
     {
         $this->caFlag = true;
+    }
+
+    /**
+     * Queue an extension to be included when signing a new certificate.
+     *
+     * @param string $id
+     * @param mixed $value
+     * @param bool $critical
+     */
+    public function queueExtension($id, $value, $critical = false)
+    {
+        $this->pendingExtensions[] = ['id' => $id, 'value' => $value, 'critical' => $critical];
     }
 
     /**
@@ -3800,7 +3824,9 @@ class X509
             'PSS' :
             'PKCS8';
 
-        $publicKey = base64_decode(preg_replace('#-.+-|[\r\n]#', '', $this->publicKey->toString($format)));
+        $options = $format === 'PSS' ? ['omitParameters' => true] : [];
+
+        $publicKey = base64_decode(preg_replace('#-.+-|[\r\n]#', '', $this->publicKey->toString($format, $options)));
 
         $decoded = ASN1::decodeBER($publicKey);
         if (!$decoded) {
@@ -3811,7 +3837,7 @@ class X509
             return false;
         }
 
-        $mapped['subjectPublicKey'] = $this->publicKey->toString($format);
+        $mapped['subjectPublicKey'] = $this->publicKey->toString($format, $options);
 
         return $mapped;
     }
