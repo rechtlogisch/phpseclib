@@ -1036,6 +1036,28 @@ IBgv3a3Lyb+IQtT75LE1yjE=
         $this->assertSame($r['saltLength'], $r2['saltLength']);
     }
 
+    public function testPSSOmitParameters()
+    {
+        $rsa = RSA::createKey(512)
+            ->withPadding(RSA::SIGNATURE_PSS)
+            ->withHash('sha256')
+            ->withMGFHash('sha256');
+
+        $private = PSS::load($rsa->toString('PSS'));
+        $privateWithoutParameters = PSS::load($rsa->toString('PSS', ['omitParameters' => true]));
+        $public = PSS::load($rsa->getPublicKey()->toString('PSS'));
+        $publicWithoutParameters = PSS::load($rsa->getPublicKey()->toString('PSS', ['omitParameters' => true]));
+
+        $this->assertSame('sha256', $private['hash']);
+        $this->assertSame('sha256', $private['MGFHash']);
+        $this->assertSame('sha1', $privateWithoutParameters['hash']);
+        $this->assertSame('sha1', $privateWithoutParameters['MGFHash']);
+        $this->assertSame('sha256', $public['hash']);
+        $this->assertSame('sha256', $public['MGFHash']);
+        $this->assertSame('sha1', $publicWithoutParameters['hash']);
+        $this->assertSame('sha1', $publicWithoutParameters['MGFHash']);
+    }
+
     public function testOpenSSHPrivate()
     {
         $key = '-----BEGIN OPENSSH PRIVATE KEY-----
