@@ -145,6 +145,68 @@ p0GbMJDyR4e9T04ZZwIDAQAB
         RSA::forceEngine();
     }
 
+    public function testPSSSignAndVerifyAcrossEngines()
+    {
+        $privatekey = RSA::createKey(1024)
+            ->withHash('sha256')
+            ->withMGFHash('sha256')
+            ->withPadding(RSA::SIGNATURE_PSS);
+        $publickey = $privatekey->getPublicKey();
+
+        $message = 'zzzz';
+        $signature = $privatekey->sign($message);
+
+        RSA::forceEngine('PHP');
+        try {
+            $this->assertTrue($publickey->verify($message, $signature));
+        } finally {
+            RSA::forceEngine();
+        }
+    }
+
+    public function testPSSSignWithForcedOpenSSLEngineFailsOnSmallKey()
+    {
+        if (!defined('OPENSSL_PKCS1_PSS_PADDING')) {
+            $this->markTestSkipped('OPENSSL_PKCS1_PSS_PADDING is not defined (requires PHP >= 8.5)');
+        }
+
+        $privatekey = RSA::createKey(512)
+            ->withHash('sha256')
+            ->withMGFHash('sha256')
+            ->withPadding(RSA::SIGNATURE_PSS);
+
+        RSA::forceEngine('OpenSSL');
+        try {
+            $this->expectException(BadConfigurationException::class);
+            $privatekey->sign('zzzz');
+        } finally {
+            RSA::forceEngine();
+        }
+    }
+
+    public function testPSSSignWithForcedOpenSSLEngineFailsOnOldOpenSSL()
+    {
+        if (!defined('OPENSSL_PKCS1_PSS_PADDING')) {
+            $this->markTestSkipped('OPENSSL_PKCS1_PSS_PADDING is not defined (requires PHP >= 8.5)');
+        }
+        if (OPENSSL_VERSION_NUMBER >= 0x30100000) {
+            $this->markTestSkipped('OpenSSL >= 3.1.0 defaults to a spec-compliant PSS salt length for this key size');
+        }
+
+        $privatekey = RSA::createKey(1024)
+            ->withHash('sha256')
+            ->withMGFHash('sha256')
+            ->withPadding(RSA::SIGNATURE_PSS);
+
+        RSA::forceEngine('OpenSSL');
+        try {
+            $this->expectException(BadConfigurationException::class);
+            $privatekey->sign('zzzz');
+        } finally {
+            RSA::forceEngine();
+        }
+    }
+
     public function testSmallModulo()
     {
         $this->expectException('LengthException');
@@ -474,5 +536,34 @@ B78AVyeOXhlI
         }
         // reset
         RSA::forceEngine();
+    }
+
+    public function testLongSaltLengthPSS()
+    {
+        $public = PublicKeyLoader::load('-----BEGIN PUBLIC KEY-----
+MIIBCgKCAQEA4f5wg5l2hKsTeNem/V41fGnJm6gOdrj8ym3rFkEU/wT8RDtnSgFEZOQpHEgQ
+7JL38xUfU0Y3g6aYw9QT0hJ7mCpz9Er5qLaMXJwZxzHzAahlfA0icqabvJOMvQtzD6uQv6wP
+EyZtDTWiQi9AXwBpHssPnpYGIn20ZZuNlX2BrClciHhCPUIIZOQn/MmqTD31jSyjoQoV7Mhh
+MTATKJx2XrHhR+1DcKJzQBSTAGnpYVaqpsARap+nwRipr3nUTuxyGohBTSmjJ2usSeQXHI3b
+ODIRe1AuTyHceAbewn8b462yEWKARdpd9AjQW5SIVPfdsz5B6GlYQ5LdYKtznTuy7wIDAQAB
+-----END PUBLIC KEY-----');
+        $msg = 'eyJhbGciOiJQUzI1NiIsInR5cCI6IkpXVCJ9.eyJmb28iOiJiYXIifQ';
+        $sig = base64_decode('PPG4xyDVY8ffp4CcxofNmsTDXsrVG2npdQuibLhJbv4ClyPTUtR5giNSvuxo03kB6I8VXVr0Y9X7UxhJVEoJOmULAwRWaUsDnIewQa101cVhMa6iR8X37kfFoiZ6NkS+c7henVkkQWu2HtotkEtQvN5hFlk8IevXXPmvZlhQhwzB1sGzGYnoi1zOfuL98d3BIjUjtlwii5w6gYG2AEEzp7HnHCsb3jIwUPdq86Oe6hIFjtBwduIK90ca4UqzARpcfwxHwVLMpatKask00AgGVI0ysdk0BLMjmLutquD03XbThHScC2C2/Pp4cHWgMzvbgLU2RYYZcZRKr46QeNgz9w==');
+
+        $engines = ['libsodium', 'OpenSSL', 'PHP'];
+        foreach ($engines as $engine) {
+            try {
+                RSA::forceEngine($engine);
+
+                RSA::enableSaltLengthDiscovery();
+                $this->assertTrue($public->verify($msg, $sig), "Failed asserting that the long salt validates with $engine and salt length discovery enabled");
+                RSA::disableSaltLengthDiscovery();
+                $this->assertFalse($public->verify($msg, $sig), "Failed asserting that the long salt validates with $engine and salt length discovery disabled");
+            } catch (BadConfigurationException $e) {
+            }
+        }
+        // reset
+        RSA::forceEngine();
+        RSA::enableSaltLengthDiscovery();
     }
 }
