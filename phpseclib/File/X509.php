@@ -57,37 +57,37 @@ class X509
     /**
      * Return internal array representation
      *
-     * @see \phpseclib3\File\X509::getDN()
+     * @see X509::getDN()
      */
     const DN_ARRAY = 0;
     /**
      * Return string
      *
-     * @see \phpseclib3\File\X509::getDN()
+     * @see X509::getDN()
      */
     const DN_STRING = 1;
     /**
      * Return ASN.1 name string
      *
-     * @see \phpseclib3\File\X509::getDN()
+     * @see X509::getDN()
      */
     const DN_ASN1 = 2;
     /**
      * Return OpenSSL compatible array
      *
-     * @see \phpseclib3\File\X509::getDN()
+     * @see X509::getDN()
      */
     const DN_OPENSSL = 3;
     /**
      * Return canonical ASN.1 RDNs string
      *
-     * @see \phpseclib3\File\X509::getDN()
+     * @see X509::getDN()
      */
     const DN_CANON = 4;
     /**
      * Return name hash for file indexing
      *
-     * @see \phpseclib3\File\X509::getDN()
+     * @see X509::getDN()
      */
     const DN_HASH = 5;
 
@@ -96,25 +96,25 @@ class X509
      *
      * ie. a base64-encoded PEM with a header and a footer
      *
-     * @see \phpseclib3\File\X509::saveX509()
-     * @see \phpseclib3\File\X509::saveCSR()
-     * @see \phpseclib3\File\X509::saveCRL()
+     * @see X509::saveX509()
+     * @see X509::saveCSR()
+     * @see X509::saveCRL()
      */
     const FORMAT_PEM = 0;
     /**
      * Save as DER
      *
-     * @see \phpseclib3\File\X509::saveX509()
-     * @see \phpseclib3\File\X509::saveCSR()
-     * @see \phpseclib3\File\X509::saveCRL()
+     * @see X509::saveX509()
+     * @see X509::saveCSR()
+     * @see X509::saveCRL()
      */
     const FORMAT_DER = 1;
     /**
      * Save as a SPKAC
      *
-     * @see \phpseclib3\File\X509::saveX509()
-     * @see \phpseclib3\File\X509::saveCSR()
-     * @see \phpseclib3\File\X509::saveCRL()
+     * @see X509::saveX509()
+     * @see X509::saveCSR()
+     * @see X509::saveCRL()
      *
      * Only works on CSRs. Not currently supported.
      */
@@ -124,9 +124,9 @@ class X509
      *
      * Used only by the load*() functions
      *
-     * @see \phpseclib3\File\X509::saveX509()
-     * @see \phpseclib3\File\X509::saveCSR()
-     * @see \phpseclib3\File\X509::saveCRL()
+     * @see X509::saveX509()
+     * @see X509::saveCSR()
+     * @see X509::saveCRL()
      */
     const FORMAT_AUTO_DETECT = 3;
 
@@ -277,9 +277,17 @@ class X509
     private $domains = null;
 
     /**
+     * URL fetch callback
+     *
+     * @var string|array|null
+     */
+    private static $urlFetchCallback = null;
+
+    /**
      * Default Constructor.
      *
      * @return X509
+     * @changed in phpseclib 4.0.0
      */
     public function __construct()
     {
@@ -436,6 +444,7 @@ class X509
      * @param array|string $cert
      * @param int $mode
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function loadX509($cert, $mode = self::FORMAT_AUTO_DETECT)
     {
@@ -509,6 +518,7 @@ class X509
      * @param array $cert
      * @param int $format optional
      * @return string
+     * @removed in phpseclib 4.0.0
      */
     public function saveX509(array $cert, $format = self::FORMAT_PEM)
     {
@@ -966,6 +976,7 @@ class X509
      *
      * @param string $cert
      * @return bool
+     * @removed in phpseclib 4.0.0
      */
     public function loadCA($cert)
     {
@@ -1092,6 +1103,7 @@ class X509
      *
      * @param \DateTimeInterface|string $date optional
      * @return bool
+     * @removed in phpseclib 4.0.0
      */
     public function validateDate($date = null)
     {
@@ -1122,6 +1134,10 @@ class X509
     /**
      * Fetches a URL
      *
+     * If a fetch callback is set via setURLFetchCallback(), the host is resolved
+     * once and the connection is pinned to that IP (the callback judges the
+     * resolved IP, preventing DNS-rebinding bypass).
+     *
      * @param string $url
      * @return bool|string
      */
@@ -1132,25 +1148,58 @@ class X509
         }
 
         $parts = parse_url($url);
+        if ($parts === false || !isset($parts['scheme']) || !isset($parts['host'])) {
+            return false;
+        }
+        $host = $parts['host'];
+        $port = isset($parts['port']) ? $parts['port'] : 80;
+
+        if (isset(self::$urlFetchCallback)) {
+            if (filter_var($host, FILTER_VALIDATE_IP)) {
+                $ip = $host;
+                // unwrap IPv4-mapped IPv6 so the callback judges the real v4 address
+                if (preg_match('/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i', $ip, $m)) {
+                    $ip = $m[1];
+                }
+            } else {
+                $records = dns_get_record($host, DNS_A | DNS_AAAA);
+                if (!$records) {
+                    return false;
+                }
+                if (isset($records[0]['ip'])) {
+                    $ip = $records[0]['ip'];
+                } elseif (isset($records[0]['ipv6'])) {
+                    $ip = $records[0]['ipv6'];
+                } else {
+                    return false;
+                }
+            }
+            if (!call_user_func(self::$urlFetchCallback, $host, $ip, $port, $parts['scheme'])) {
+                return false;
+            }
+            $target = strpos($ip, ':') !== false ? "[$ip]" : $ip;
+        } else {
+            $target = $host;
+        }
+
         $data = '';
         switch ($parts['scheme']) {
             case 'http':
-                $fsock = @fsockopen($parts['host'], isset($parts['port']) ? $parts['port'] : 80);
+                $fsock = @fsockopen($target, $port);
                 if (!$fsock) {
                     return false;
                 }
-                $path = $parts['path'];
+                $path = isset($parts['path']) ? $parts['path'] : '/';
                 if (isset($parts['query'])) {
                     $path .= '?' . $parts['query'];
                 }
                 fputs($fsock, "GET $path HTTP/1.0\r\n");
-                fputs($fsock, "Host: $parts[host]\r\n\r\n");
+                fputs($fsock, "Host: $host\r\n\r\n");
                 $line = fgets($fsock, 1024);
-                if (strlen($line) < 3) {
+                if ($line === false || strlen($line) < 3) {
                     return false;
                 }
-                preg_match('#HTTP/1.\d (\d{3})#', $line, $temp);
-                if ($temp[1] != '200') {
+                if (!preg_match('#HTTP/1.\d (\d{3})#', $line, $temp) || $temp[1] != '200') {
                     return false;
                 }
 
@@ -1169,7 +1218,8 @@ class X509
                 break;
             //case 'ftp':
             //case 'ldap':
-            //default:
+            default:
+                return false;
         }
 
         return $data;
@@ -1249,6 +1299,7 @@ class X509
      *
      * @param bool $caonly optional
      * @return mixed
+     * @changed in phpseclib 4.0.0
      */
     public function validateSignature($caonly = true)
     {
@@ -1403,6 +1454,19 @@ class X509
         switch ($publicKeyAlgorithm) {
             case 'id-RSASSA-PSS':
                 $key = RSA::loadFormat('PSS', $publicKey);
+                if ($signatureAlgorithm == 'id-RSASSA-PSS' && isset($this->currentCert['signatureAlgorithm']['parameters'])) {
+                    // the public key may omit the PSS parameters (omitParameters option), so use
+                    // the signatureAlgorithm parameters for verification (RFC 4055)
+                    $params = $this->decodePSSParams($this->currentCert['signatureAlgorithm']['parameters']);
+                    if ($params !== false) {
+                        $key = $key
+                            ->withHash($params['hash'])
+                            ->withMGFHash($params['MGFHash']);
+                        if (isset($params['saltLength'])) {
+                            $key = $key->withSaltLength($params['saltLength']);
+                        }
+                    }
+                }
                 break;
             case 'rsaEncryption':
                 $key = RSA::loadFormat('PKCS8', $publicKey);
@@ -1464,6 +1528,68 @@ class X509
     }
 
     /**
+     * Decodes the parameters of an RSASSA-PSS signature algorithm identifier
+     *
+     * Returns the hash, MGF hash and salt length in the same form as PSS::load()
+     *
+     * @param Element|string $parameters
+     * @return array|false
+     */
+    private function decodePSSParams($parameters)
+    {
+        if (!($parameters instanceof Element) && !is_string($parameters)) {
+            return false;
+        }
+
+        ASN1::loadOIDs([
+            'id-sha1' => '1.3.14.3.2.26',
+            'id-sha256' => '2.16.840.1.101.3.4.2.1',
+            'id-sha384' => '2.16.840.1.101.3.4.2.2',
+            'id-sha512' => '2.16.840.1.101.3.4.2.3',
+            'id-sha224' => '2.16.840.1.101.3.4.2.4',
+            'id-sha512/224' => '2.16.840.1.101.3.4.2.5',
+            'id-sha512/256' => '2.16.840.1.101.3.4.2.6',
+            'id-mgf1' => '1.2.840.113549.1.1.8'
+        ]);
+
+        $decoded = ASN1::decodeBER($parameters);
+        if (!$decoded) {
+            return false;
+        }
+        $params = ASN1::asn1map($decoded[0], Maps\RSASSA_PSS_params::MAP);
+        if (!is_array($params)) {
+            return false;
+        }
+
+        if (isset($params['maskGenAlgorithm']['parameters'])) {
+            $decoded = ASN1::decodeBER($params['maskGenAlgorithm']['parameters']);
+            if (!$decoded) {
+                return false;
+            }
+            $params['maskGenAlgorithm']['parameters'] = ASN1::asn1map($decoded[0], Maps\HashAlgorithm::MAP);
+        } else {
+            $params['maskGenAlgorithm'] = [
+                'algorithm' => 'id-mgf1',
+                'parameters' => ['algorithm' => 'id-sha1']
+            ];
+        }
+
+        if (!isset($params['hashAlgorithm']['algorithm'])) {
+            $params['hashAlgorithm']['algorithm'] = 'id-sha1';
+        }
+
+        $result = [
+            'hash' => str_replace('id-', '', $params['hashAlgorithm']['algorithm']),
+            'MGFHash' => str_replace('id-', '', $params['maskGenAlgorithm']['parameters']['algorithm'])
+        ];
+        if (isset($params['saltLength'])) {
+            $result['saltLength'] = (int) "$params[saltLength]";
+        }
+
+        return $result;
+    }
+
+    /**
      * Sets the recursion limit
      *
      * When validating a signature it may be necessary to download intermediate certs from URI's.
@@ -1480,6 +1606,7 @@ class X509
     /**
      * Prevents URIs from being automatically retrieved
      *
+     * @removed in phpseclib 4.0.0
      */
     public static function disableURLFetch()
     {
@@ -1489,6 +1616,7 @@ class X509
     /**
      * Allows URIs to be automatically retrieved
      *
+     * @removed in phpseclib 4.0.0
      */
     public static function enableURLFetch()
     {
@@ -1502,6 +1630,7 @@ class X509
      *
      * @param string $ip
      * @return string
+     * @removed in phpseclib 4.0.0
      */
     public static function decodeIP($ip)
     {
@@ -1515,6 +1644,7 @@ class X509
      *
      * @param string $ip
      * @return array
+     * @removed in phpseclib 4.0.0
      */
     public static function decodeNameConstraintIP($ip)
     {
@@ -1531,6 +1661,7 @@ class X509
      *
      * @param string|array $ip
      * @return string
+     * @removed in phpseclib 4.0.0
      */
     public static function encodeIP($ip)
     {
@@ -1654,6 +1785,7 @@ class X509
      * @param mixed $propValue
      * @param string $type optional
      * @return bool
+     * @removed in phpseclib 4.0.0
      */
     public function setDNProp($propName, $propValue, $type = 'utf8String')
     {
@@ -1684,6 +1816,7 @@ class X509
      * Remove Distinguished Name properties
      *
      * @param string $propName
+     * @removed in phpseclib 4.0.0
      */
     public function removeDNProp($propName)
     {
@@ -1717,6 +1850,7 @@ class X509
      * @param array $dn optional
      * @param bool $withType optional
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function getDNProp($propName, $dn = null, $withType = false)
     {
@@ -1781,6 +1915,7 @@ class X509
      * @param bool $merge optional
      * @param string $type optional
      * @return bool
+     * @changed in phpseclib 4.0.0
      */
     public function setDN($dn, $merge = false, $type = 'utf8String')
     {
@@ -1822,6 +1957,7 @@ class X509
      * @param mixed $format optional
      * @param array $dn optional
      * @return array|bool|string
+     * @changed in phpseclib 4.0.0
      */
     public function getDN($format = self::DN_ARRAY, $dn = null)
     {
@@ -1963,6 +2099,7 @@ class X509
      *
      * @param int $format optional
      * @return mixed
+     * @changed in phpseclib 4.0.0
      */
     public function getIssuerDN($format = self::DN_ARRAY)
     {
@@ -1984,6 +2121,7 @@ class X509
      *
      * @param int $format optional
      * @return mixed
+     * @changed in phpseclib 4.0.0
      */
     public function getSubjectDN($format = self::DN_ARRAY)
     {
@@ -2007,6 +2145,7 @@ class X509
      * @param string $propName
      * @param bool $withType optional
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function getIssuerDNProp($propName, $withType = false)
     {
@@ -2028,6 +2167,7 @@ class X509
      * @param string $propName
      * @param bool $withType optional
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function getSubjectDNProp($propName, $withType = false)
     {
@@ -2049,6 +2189,7 @@ class X509
      * Get the certificate chain for the current cert
      *
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function getChain()
     {
@@ -2090,6 +2231,7 @@ class X509
      * Returns the current cert
      *
      * @return array|bool
+     * @removed in phpseclib 4.0.0
      */
     public function &getCurrentCert()
     {
@@ -2115,6 +2257,7 @@ class X509
      * Key needs to be a \phpseclib3\Crypt\RSA object
      *
      * @param PrivateKey $key
+     * @removed in phpseclib 4.0.0
      */
     public function setPrivateKey(PrivateKey $key)
     {
@@ -2127,6 +2270,7 @@ class X509
      * Used for SPKAC CSR's
      *
      * @param string $challenge
+     * @removed in phpseclib 4.0.0
      */
     public function setChallenge($challenge)
     {
@@ -2187,6 +2331,7 @@ class X509
      * @param string $csr
      * @param int $mode
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function loadCSR($csr, $mode = self::FORMAT_AUTO_DETECT)
     {
@@ -2261,6 +2406,7 @@ class X509
      * @param array $csr
      * @param int $format optional
      * @return string
+     * @removed in phpseclib 4.0.0
      */
     public function saveCSR(array $csr, $format = self::FORMAT_PEM)
     {
@@ -2306,6 +2452,7 @@ class X509
      *
      * @param string $spkac
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function loadSPKAC($spkac)
     {
@@ -2370,6 +2517,7 @@ class X509
      * @param array $spkac
      * @param int $format optional
      * @return string
+     * @removed in phpseclib 4.0.0
      */
     public function saveSPKAC(array $spkac, $format = self::FORMAT_PEM)
     {
@@ -2407,6 +2555,7 @@ class X509
      * @param string $crl
      * @param int $mode
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function loadCRL($crl, $mode = self::FORMAT_AUTO_DETECT)
     {
@@ -2473,6 +2622,7 @@ class X509
      * @param array $crl
      * @param int $format optional
      * @return string
+     * @removed in phpseclib 4.0.0
      */
     public function saveCRL(array $crl, $format = self::FORMAT_PEM)
     {
@@ -2553,6 +2703,7 @@ class X509
      * a CSR or something with the DN and public key explicitly set.
      *
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function sign(X509 $issuer, X509 $subject)
     {
@@ -2740,6 +2891,7 @@ class X509
      * Sign a CSR
      *
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function signCSR()
     {
@@ -2795,6 +2947,7 @@ class X509
      * Sign a SPKAC
      *
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function signSPKAC()
     {
@@ -2857,6 +3010,7 @@ class X509
      * $issuer's private key needs to be loaded.
      *
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function signCRL(X509 $issuer, X509 $crl)
     {
@@ -3419,6 +3573,7 @@ class X509
      * @param array $cert optional
      * @param string $path optional
      * @return array
+     * @removed in phpseclib 4.0.0
      */
     public function getExtensions($cert = null, $path = null)
     {
@@ -3445,6 +3600,7 @@ class X509
      * @param string $id
      * @param int $disposition optional
      * @return bool
+     * @removed in phpseclib 4.0.0
      */
     public function removeAttribute($id, $disposition = self::ATTR_ALL)
     {
@@ -3495,6 +3651,7 @@ class X509
      * @param int $disposition optional
      * @param array $csr optional
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function getAttribute($id, $disposition = self::ATTR_ALL, $csr = null)
     {
@@ -3536,6 +3693,7 @@ class X509
      *
      * @param array $csr optional
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function getRequestedCertificateExtensions($csr = null)
     {
@@ -3556,6 +3714,7 @@ class X509
      *
      * @param array $csr optional
      * @return array
+     * @removed in phpseclib 4.0.0
      */
     public function getAttributes($csr = null)
     {
@@ -3582,6 +3741,7 @@ class X509
      * @param mixed $value
      * @param int $disposition optional
      * @return bool
+     * @removed in phpseclib 4.0.0
      */
     public function setAttribute($id, $value, $disposition = self::ATTR_ALL)
     {
@@ -3663,6 +3823,7 @@ class X509
      * @param mixed $key optional
      * @param int $method optional
      * @return string binary key identifier
+     * @removed in phpseclib 4.0.0
      */
     public function computeKeyIdentifier($key = null, $method = 1)
     {
@@ -3761,6 +3922,7 @@ class X509
      *
      * @param mixed ...$domains
      * @return void
+     * @removed in phpseclib 4.0.0
      */
     public function setDomain(...$domains)
     {
@@ -3773,6 +3935,7 @@ class X509
      * Set the IP Addresses's which the cert is to be valid for
      *
      * @param mixed[] ...$ipAddresses
+     * @removed in phpseclib 4.0.0
      */
     public function setIPAddress(...$ipAddresses)
     {
@@ -3869,6 +4032,7 @@ class X509
      *
      * @param string $serial
      * @return bool
+     * @removed in phpseclib 4.0.0
      */
     public function unrevoke($serial)
     {
@@ -3888,6 +4052,7 @@ class X509
      *
      * @param string $serial
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function getRevoked($serial)
     {
@@ -3905,6 +4070,7 @@ class X509
      *
      * @param array $crl optional
      * @return array|bool
+     * @removed in phpseclib 4.0.0
      */
     public function listRevoked($crl = null)
     {
@@ -3933,6 +4099,7 @@ class X509
      * @param string $serial
      * @param string $id
      * @return bool
+     * @removed in phpseclib 4.0.0
      */
     public function removeRevokedCertificateExtension($serial, $id)
     {
@@ -3954,6 +4121,7 @@ class X509
      * @param string $id
      * @param array $crl optional
      * @return mixed
+     * @removed in phpseclib 4.0.0
      */
     public function getRevokedCertificateExtension($serial, $id, $crl = null)
     {
@@ -4001,6 +4169,7 @@ class X509
      * @param bool $critical optional
      * @param bool $replace optional
      * @return bool
+     * @removed in phpseclib 4.0.0
      */
     public function setRevokedCertificateExtension($serial, $id, $value, $critical = false, $replace = true)
     {
@@ -4051,9 +4220,20 @@ class X509
      * @param mixed $value
      * @param bool $critical
      * @param bool $replace
+     * @removed in phpseclib 4.0.0
      */
     public function setExtensionValue($id, $value, $critical = false, $replace = false)
     {
         $this->extensionValues[$id] = compact('critical', 'replace', 'value');
+    }
+
+    /**
+     * Returns the OID corresponding to a name
+     *
+     * @param ?callable $callback
+     */
+    public static function setURLFetchCallback($callback)
+    {
+        self::$urlFetchCallback = $callback;
     }
 }

@@ -1,8 +1,37 @@
 # Changelog
 
+## 3.0.57 - 2026-08-26
+
+- ASN1: fix tag matching for tagged CHOICE children (#2158)
+- RSA: fix for openssl_verify calls that error out (#2161)
+- RSA/PublicKey: implement salt length discovery for PSS verification (#2164)
+- BigInteger/PHP: don't return the divisor as the common residue (#2165)
+- Curve25519/448: improve timing attack resistance
+
+## 3.0.56 - 2026-08-02
+
+- RSA: don't use OpenSSL for PSS on OpenSSL < 3.1.0 (#2152)
+- SFTP: throw TimeoutExceptions on timeout vs UnexpectedValueException (#2156)
+- SFTP/Stream: use default context if one isn't explicitly provided (#2154)
+
+## 3.0.55 - 2026-06-14
+
+- RSA: signature verification with PKCS1 with failed when the parameters field was absent
+
+## 3.0.54 - 2026-06-14
+
+- X509: add setURLFetchCallback() method (CVE-2026-55599)
+
+## 3.0.53 - 2026-06-09
+
+- RSA: decryption with password protected keys didn't work with OpenSSL engine (#2140)
+- ASN1: speed up OID calculations
+- SFTP: add hardlink() method (#2142)
+- DES: fix PHP deprecations (#2145)
+
 ## 3.0.52 - 2026-04-27
 
-- ASN1: more stringent OID length limits
+- ASN1: more stringent OID length limits (CVE-2026-44167)
 - RSA: OpenSSL 3.2+ changed how PKCS1 decryption works (#2136)
 - Keys/OpenSSH: support comments with spaces in them (#2137)
 
@@ -359,9 +388,14 @@
   - Salsa20 / ChaCha20
 - namespace changed from `phpseclib\` to `\phpseclib3` to facilitate phpseclib 2 shim (phpseclib2_compat)
 
+## 2.0.55 - 2026-06-14
+
+- X509: add setURLFetchCallback() method (CVE-2026-55599)
+- ASN1: speed up OID calculations
+
 ## 2.0.54 - 2026-04-27
 
-- ASN1: more stringent OID length limits
+- ASN1: more stringent OID length limits (CVE-2026-44167)
 
 ## 2.0.53 - 2026-04-09
 
@@ -775,9 +809,13 @@
 - Classes were renamed and namespaced ([#243](https://github.com/phpseclib/phpseclib/issues/243))
 - The use of an autoloader is now required (e.g. Composer)
 
+## 1.0.30 - 2026-06-14
+
+- X509: add setURLFetchCallback() method (CVE-2026-55599)
+
 ## 1.0.29 - 2026-04-27
 
-- ASN1: more stringent OID length limits
+- ASN1: more stringent OID length limits (CVE-2026-44167)
 
 ## 1.0.28 - 2026-04-09
 

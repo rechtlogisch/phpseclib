@@ -197,6 +197,45 @@ aBtsWpliLSex/HHhtRW9AkBGcq67zKmEpJ9kXcYLEjJii3flFS+Ct/rNm+Hhm1l7
         $this->assertArrayHasKey('parameters', $cert['tbsCertificate']['signature']);
     }
 
+    public function testPSSSaveOmitsSubjectPublicKeyParameters()
+    {
+        $privateKey = RSA::createKey(1024)
+            ->withPadding(RSA::SIGNATURE_PSS)
+            ->withHash('sha256')
+            ->withMGFHash('sha256')
+            ->withSaltLength(32);
+
+        $subject = new X509();
+        $subject->setDNProp('id-at-organizationName', 'phpseclib demo cert');
+        $subject->setPublicKey($privateKey->getPublicKey());
+
+        $issuer = new X509();
+        $issuer->setPrivateKey($privateKey);
+        $issuer->setDN($subject->getDN());
+
+        $x509 = new X509();
+        $x509->setEndDate('lifetime');
+        $x509->queueExtension('id-ce-basicConstraints', ['cA' => false], true);
+
+        $cert = $x509->loadX509($x509->saveX509($x509->sign($issuer, $subject)));
+
+        $this->assertSame('id-RSASSA-PSS', $cert['tbsCertificate']['subjectPublicKeyInfo']['algorithm']['algorithm']);
+        $this->assertArrayNotHasKey('parameters', $cert['tbsCertificate']['subjectPublicKeyInfo']['algorithm']);
+        $this->assertArrayHasKey('parameters', $cert['signatureAlgorithm']);
+        $this->assertArrayHasKey('parameters', $cert['tbsCertificate']['signature']);
+
+        foreach ($cert['tbsCertificate']['extensions'] as $extension) {
+            if ($extension['extnId'] === 'id-ce-basicConstraints') {
+                $this->assertTrue($extension['critical']);
+                $this->assertSame(['cA' => false], $extension['extnValue']);
+
+                return;
+            }
+        }
+
+        $this->fail('The queued basic constraints extension was not present.');
+    }
+
     public function testGetOID()
     {
         // load the OIDs
@@ -946,7 +985,7 @@ U9VQQSQzY1oZMVX8i1m5WUTLPz2yLJIBQVdXqhMCQBGoiuSoSjafUhV7i1cEGpb88h5NBYZzWXGZ
         $this->assertSame('id-RSASSA-PSS', $r['tbsCertificate']['signature']['algorithm']);
         $this->assertArrayHasKey('parameters', $r['tbsCertificate']['signature']);
         $this->assertSame('id-RSASSA-PSS', $r['tbsCertificate']['subjectPublicKeyInfo']['algorithm']['algorithm']);
-        $this->assertArrayHasKey('parameters', $r['tbsCertificate']['subjectPublicKeyInfo']['algorithm']);
+        $this->assertArrayNotHasKey('parameters', $r['tbsCertificate']['subjectPublicKeyInfo']['algorithm']);
         $this->assertSame('id-RSASSA-PSS', $r['signatureAlgorithm']['algorithm']);
         $this->assertArrayHasKey('parameters', $r['signatureAlgorithm']);
     }

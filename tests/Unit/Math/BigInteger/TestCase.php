@@ -122,6 +122,28 @@ abstract class TestCase extends PhpseclibTestCase
         $this->assertSame('1', (string) $r);
     }
 
+    public function testDivideNegativeExact()
+    {
+        // The second element of divide() is the "common residue" -- the first
+        // positive modulo -- so only a negative remainder gets the divisor added.
+        // When the division is exact the remainder is already 0, and adding the
+        // divisor returned the modulus itself, which is never a valid residue.
+        // The GMP and BCMath engines returned 0 here; the PHP engines did not.
+        foreach ([['-256', '256'], ['-7', '7'], ['-256', '2'], ['-7', '1']] as $pair) {
+            list($a, $b) = $pair;
+            list(, $r) = $this->getInstance($a)->divide($this->getInstance($b));
+            $this->assertSame('0', (string) $r, "$a / $b should leave no remainder");
+            $this->assertNotSame($b, (string) $r, "$a / $b returned the divisor as the residue");
+        }
+
+        // Same again with a divisor too large for the single-digit branch of
+        // divideHelper(), so the general long-division path is covered too.
+        list($q, $r) = $this->getInstance('-340282366920938463463374607431768211456')
+            ->divide($this->getInstance('18446744073709551616'));
+        $this->assertSame('-18446744073709551616', (string) $q);
+        $this->assertSame('0', (string) $r);
+    }
+
     public function testModPow()
     {
         $a = $this->getInstance('10');
@@ -550,5 +572,11 @@ E252896950917476ECE5E8FC27D5F053D6018D91B502C4787558A002B9283DA7', 16);
     {
         $a = $this->getInstance('999999999');
         $this->assertSame('3b9ac9ff', $a->toHex());
+    }
+
+    public function testEmptyStringLength()
+    {
+        $a = $this->getInstance('');
+        $this->assertSame(0, $a->getLengthInBytes());
     }
 }
