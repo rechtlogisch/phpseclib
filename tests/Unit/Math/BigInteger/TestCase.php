@@ -122,6 +122,42 @@ abstract class TestCase extends PhpseclibTestCase
         $this->assertSame('1', (string) $r);
     }
 
+    public function testDivideNegativeExact()
+    {
+        // The second element of divide() is the "common residue" -- the first
+        // positive modulo -- so only a negative remainder gets the divisor added.
+        // When the division is exact the remainder is already 0, and adding the
+        // divisor returned the modulus itself, which is never a valid residue.
+        // The GMP and BCMath engines returned 0 here; the PHP engines did not.
+        foreach ([['-256', '256'], ['-7', '7'], ['-256', '2'], ['-7', '1']] as $pair) {
+            list($a, $b) = $pair;
+            list(, $r) = $this->getInstance($a)->divide($this->getInstance($b));
+            $this->assertSame('0', (string) $r, "$a / $b should leave no remainder");
+            $this->assertNotSame($b, (string) $r, "$a / $b returned the divisor as the residue");
+        }
+
+        // Same again with a divisor too large for the single-digit branch of
+        // divideHelper(), so the general long-division path is covered too.
+        list($q, $r) = $this->getInstance('-340282366920938463463374607431768211456')
+            ->divide($this->getInstance('18446744073709551616'));
+        $this->assertSame('-18446744073709551616', (string) $q);
+        $this->assertSame('0', (string) $r);
+    }
+
+    public function testModPowModuloOne()
+    {
+        foreach (['-7', '0', '7'] as $base) {
+            foreach (['0', '1', '17'] as $exponent) {
+                foreach (['1', '-1'] as $modulus) {
+                    $a = $this->getInstance($base);
+                    $e = $this->getInstance($exponent);
+                    $n = $this->getInstance($modulus);
+                    $this->assertSame('0', (string) $a->modPow($e, $n));
+                }
+            }
+        }
+    }
+
     public function testModPow()
     {
         $a = $this->getInstance('10');
@@ -153,7 +189,7 @@ abstract class TestCase extends PhpseclibTestCase
         $arr = $a->extendedGCD($b);
 
         $this->assertSame('21', (string) $arr['gcd']);
-        $this->assertSame(21, $a->toString() * $arr['x']->toString() + $b->toString() * $arr['y']->toString());
+        $this->assertSame('21', (string) $a->multiply($arr['x'])->add($b->multiply($arr['y'])));
     }
 
     public function testGCD()
@@ -430,6 +466,35 @@ abstract class TestCase extends PhpseclibTestCase
         $this->assertSame('20', (string) $bigInteger);
     }
 
+     /** @group github2187 */
+     /** @dataProvider rootRoundingProvider */
+    public function testRootRounding($value, $degree, $expected)
+    {
+        $this->assertSame($expected, (string) $this->getInstance($value)->root($degree));
+    }
+
+    public static function rootRoundingProvider()
+    {
+        return [
+            ['0', 2, '0'],
+            ['1', 2, '1'],
+            ['2', 2, '1'],
+            ['3', 1, '3'],
+            ['5', 2, '2'],
+            ['8', 2, '2'],
+            ['9', 2, '3'],
+            ['15', 3, '2'],
+            ['26', 3, '2'],
+            ['27', 2, '5'],
+            ['27', 3, '3'],
+            ['124', 3, '4'],
+            ['125', 3, '5'],
+            ['126', 3, '5'],
+            ['256', 2, '16'],
+            ['1000000', 6, '10'],
+        ];
+    }
+
     public function testPow()
     {
         $bigInteger = $this->getInstance('20');
@@ -550,5 +615,11 @@ E252896950917476ECE5E8FC27D5F053D6018D91B502C4787558A002B9283DA7', 16);
     {
         $a = $this->getInstance('999999999');
         $this->assertSame('3b9ac9ff', $a->toHex());
+    }
+
+    public function testEmptyStringLength()
+    {
+        $a = $this->getInstance('');
+        $this->assertSame(0, $a->getLengthInBytes());
     }
 }

@@ -17,6 +17,23 @@ use phpseclib3\Tests\PhpseclibTestCase;
 
 class X509Test extends PhpseclibTestCase
 {
+    private $server;
+
+    private $serverPipes;
+
+    private $urlFetches = [];
+
+    public function tearDown()
+    {
+        $this->stopURLFetchServer();
+        X509::setURLFetchCallback(null);
+        X509::setURLFetchConnectTimeout(5);
+        X509::setURLFetchTimeout(10);
+        X509::setURLFetchMaxSize(65536);
+        self::setVar(new X509(), 'urlFetchDeadline', null);
+        parent::tearDown();
+    }
+
     public function testExtensionMapping()
     {
         $test = '-----BEGIN CERTIFICATE-----
@@ -195,6 +212,45 @@ aBtsWpliLSex/HHhtRW9AkBGcq67zKmEpJ9kXcYLEjJii3flFS+Ct/rNm+Hhm1l7
         $this->assertArrayHasKey('parameters', $cert['tbsCertificate']['subjectPublicKeyInfo']['algorithm']);
         $this->assertArrayHasKey('parameters', $cert['signatureAlgorithm']);
         $this->assertArrayHasKey('parameters', $cert['tbsCertificate']['signature']);
+    }
+
+    public function testPSSSaveOmitsSubjectPublicKeyParameters()
+    {
+        $privateKey = RSA::createKey(1024)
+            ->withPadding(RSA::SIGNATURE_PSS)
+            ->withHash('sha256')
+            ->withMGFHash('sha256')
+            ->withSaltLength(32);
+
+        $subject = new X509();
+        $subject->setDNProp('id-at-organizationName', 'phpseclib demo cert');
+        $subject->setPublicKey($privateKey->getPublicKey());
+
+        $issuer = new X509();
+        $issuer->setPrivateKey($privateKey);
+        $issuer->setDN($subject->getDN());
+
+        $x509 = new X509();
+        $x509->setEndDate('lifetime');
+        $x509->queueExtension('id-ce-basicConstraints', ['cA' => false], true);
+
+        $cert = $x509->loadX509($x509->saveX509($x509->sign($issuer, $subject)));
+
+        $this->assertSame('id-RSASSA-PSS', $cert['tbsCertificate']['subjectPublicKeyInfo']['algorithm']['algorithm']);
+        $this->assertArrayNotHasKey('parameters', $cert['tbsCertificate']['subjectPublicKeyInfo']['algorithm']);
+        $this->assertArrayHasKey('parameters', $cert['signatureAlgorithm']);
+        $this->assertArrayHasKey('parameters', $cert['tbsCertificate']['signature']);
+
+        foreach ($cert['tbsCertificate']['extensions'] as $extension) {
+            if ($extension['extnId'] === 'id-ce-basicConstraints') {
+                $this->assertTrue($extension['critical']);
+                $this->assertSame(['cA' => false], $extension['extnValue']);
+
+                return;
+            }
+        }
+
+        $this->fail('The queued basic constraints extension was not present.');
     }
 
     public function testGetOID()
@@ -687,6 +743,169 @@ M0qaEPsM2o3CSTfxSJQQIyEe+izV3UQqYSyWkNqCCFPN
         $this->assertTrue($x509->validateSignature());
     }
 
+    // issued by an untrusted CA, with an AIA caIssuers URL pointing at a closed local port
+    private function getUntrustedAIACert()
+    {
+        return '-----BEGIN CERTIFICATE-----
+MIIB8jCCAVugAwIBAgIUHTWE/PzeD+VYYe+kkT/URDbJ2iAwDQYJKoZIhvcNAQEL
+BQAwFzEVMBMGA1UEAwwMVW50cnVzdGVkIENBMCAXDTI2MTAzMTE1MjUzNFoYDzk5
+OTkxMjMxMjM1OTU5WjAXMRUwEwYDVQQDDAxsZWFmLmV4YW1wbGUwgZ8wDQYJKoZI
+hvcNAQEBBQADgY0AMIGJAoGBAJxzhj75AHvADI21Kbb8brwHjiwrnJ3M0ifOV00Y
+trCrPGluo9HzCMAZcI2K4BHFKzfvJkiXv5DpeY6bF5SgZ3iQ9qZT+rtUB5yjyfGl
+FDg2hI4cIADz2hnNEg5chCEtnh+3akHULc4fRvbsup0RsnNc6ZHFzZsmrUIdaq3b
+wa8VAgMBAAGjOTA3MDUGCCsGAQUFBwEBBCkwJzAlBggrBgEFBQcwAoYZaHR0cDov
+LzEyNy4wLjAuMToxL2NhLmNydDANBgkqhkiG9w0BAQsFAAOBgQA8yeHCejlZgz3d
+ouU2lXbEWrj1E7MQTalzPiu0aCMWp2UFRDqr/bgWc9gu23fHsdhddEHXWhD6VVaS
+fq3KdF+5GjQCICaNiff2mRqHRi3rJVuzpOm7CnJ2Jc9mt+p8QRGnVTmHVim5ymeO
+p1/+4sG5fGET+m6BqJ+pYKa2/afPfg==
+-----END CERTIFICATE-----';
+    }
+
+    public function testURLFetchTimesOut()
+    {
+        // the server keeps sending, so this needs the timeout to cover the whole request
+        $url = $this->startURLFetchServer('trickle');
+        X509::setURLFetchTimeout(1);
+
+        $start = microtime(true);
+        $this->assertFalse(self::callFunc(new X509(), 'fetchURL', [$url]));
+        $this->assertLessThan(3, microtime(true) - $start);
+    }
+
+    public function testURLFetchConnectTimeoutStaysWithinTimeout()
+    {
+        // 192.0.2.1 is reserved for documentation (RFC 5737), so connecting to it hangs
+        X509::setURLFetchTimeout(1);
+
+        $start = microtime(true);
+        $this->assertFalse(self::callFunc(new X509(), 'fetchURL', ['http://192.0.2.1/']));
+        $took = microtime(true) - $start;
+        if ($took < 0.5) {
+            $this->markTestSkipped('192.0.2.1 is refused right away on this network, so connecting to it does not hang');
+        }
+        $this->assertLessThan(3, $took);
+    }
+
+    public function testURLFetchTimeoutCoversTheCallback()
+    {
+        // the callback stands in for a slow host name lookup, which comes before connecting too
+        $url = $this->startURLFetchServer('keepalive');
+        X509::setURLFetchCallback([$this, 'allowURLFetchSlowly']);
+        X509::setURLFetchTimeout(0.2);
+        $this->assertFalse(self::callFunc(new X509(), 'fetchURL', [$url]));
+    }
+
+    public function allowURLFetchSlowly($host, $ip, $port, $scheme)
+    {
+        usleep(300000);
+        return true;
+    }
+
+    public function testURLFetchMaxSize()
+    {
+        $this->assertFalse(self::callFunc(new X509(), 'fetchURL', [$this->startURLFetchServer('large')]));
+
+        X509::setURLFetchMaxSize(70000);
+        $this->assertSame(str_repeat('a', 65536), self::callFunc(new X509(), 'fetchURL', [$this->startURLFetchServer('large')]));
+    }
+
+    public function testURLFetchStopsAtAnError()
+    {
+        $url = $this->startURLFetchServer('error');
+
+        $start = microtime(true);
+        $this->assertFalse(self::callFunc(new X509(), 'fetchURL', [$url]));
+        $this->assertLessThan(3, microtime(true) - $start);
+    }
+
+    public function testURLFetchClosesTheConnection()
+    {
+        X509::setURLFetchTimeout(2);
+        $this->assertSame('hello', self::callFunc(new X509(), 'fetchURL', [$this->startURLFetchServer('keepalive')]));
+    }
+
+    public function testURLFetchReadsBufferedData()
+    {
+        // the response takes more than one read, and the connection closes a second later. On
+        // Windows, PHP 8.3+ said the read that returned the rest of it had timed out
+        X509::setURLFetchTimeout(5);
+        $this->assertSame(str_repeat('a', 1481), self::callFunc(new X509(), 'fetchURL', [$this->startURLFetchServer('pause')]));
+    }
+
+    public function testURLFetchTimeoutCanBeInfinite()
+    {
+        // each read still waits for the server, rather than spinning until it answers
+        if (!function_exists('getrusage')) {
+            $this->markTestSkipped('getrusage(), needed to measure the CPU time, is missing');
+        }
+        $url = $this->startURLFetchServer('late');
+        X509::setURLFetchTimeout(INF);
+
+        $start = $this->getCPUTime();
+        $this->assertSame('hello', self::callFunc(new X509(), 'fetchURL', [$url]));
+        $this->assertLessThan(0.5, $this->getCPUTime() - $start);
+    }
+
+    // the CPU time this process has used, in seconds
+    private function getCPUTime()
+    {
+        $usage = getrusage();
+        return $usage['ru_utime.tv_sec'] + $usage['ru_stime.tv_sec'] + ($usage['ru_utime.tv_usec'] + $usage['ru_stime.tv_usec']) / 1000000;
+    }
+
+    public function testURLFetchSendsThePort()
+    {
+        // the server answers with the Host header, which has to name the URL's port too
+        $url = $this->startURLFetchServer('host');
+        $this->assertSame('127.0.0.1:' . parse_url($url, PHP_URL_PORT), self::callFunc(new X509(), 'fetchURL', [$url]));
+    }
+
+    public function testIntermediateURLFetchesShareTheTimeout()
+    {
+        $x509 = new X509();
+        $x509->loadX509($this->getUntrustedAIACert());
+        X509::setURLFetchCallback([$this, 'recordURLFetch']);
+        $this->urlFetches = [];
+
+        // the time for the chain is up, so the issuer's issuer isn't fetched
+        self::setVar($x509, 'urlFetchDeadline', microtime(true));
+        $this->assertFalse(self::callFunc($x509, 'testForIntermediate', [true, 1]));
+        $this->assertSame([], $this->urlFetches);
+
+        // a new chain gets the whole timeout
+        $this->assertFalse(self::callFunc($x509, 'testForIntermediate', [true, 0]));
+        $this->assertSame(['127.0.0.1:1'], $this->urlFetches);
+    }
+
+    public function recordURLFetch($host, $ip, $port, $scheme)
+    {
+        $this->urlFetches[] = "$host:$port";
+        return false;
+    }
+
+    // runs url_fetch_server.php to answer one request the way $mode says, and returns its URL
+    private function startURLFetchServer($mode)
+    {
+        $this->stopURLFetchServer();
+        $command = escapeshellarg(PHP_BINARY) . ' ' . escapeshellarg(__DIR__ . '/url_fetch_server.php') . ' ' . $mode;
+        $this->server = proc_open($command, [1 => ['pipe', 'w']], $this->serverPipes, null, null, ['bypass_shell' => true]);
+        $port = $this->server ? fgets($this->serverPipes[1]) : false;
+        if (!$port) {
+            $this->fail('url_fetch_server.php did not start');
+        }
+        return 'http://127.0.0.1:' . trim($port) . '/';
+    }
+
+    private function stopURLFetchServer()
+    {
+        if (is_resource($this->server)) {
+            fclose($this->serverPipes[1]);
+            proc_terminate($this->server);
+            proc_close($this->server);
+            $this->server = null;
+        }
+    }
+
     public function testValidateDate()
     {
         $x509 = new X509();
@@ -946,7 +1165,7 @@ U9VQQSQzY1oZMVX8i1m5WUTLPz2yLJIBQVdXqhMCQBGoiuSoSjafUhV7i1cEGpb88h5NBYZzWXGZ
         $this->assertSame('id-RSASSA-PSS', $r['tbsCertificate']['signature']['algorithm']);
         $this->assertArrayHasKey('parameters', $r['tbsCertificate']['signature']);
         $this->assertSame('id-RSASSA-PSS', $r['tbsCertificate']['subjectPublicKeyInfo']['algorithm']['algorithm']);
-        $this->assertArrayHasKey('parameters', $r['tbsCertificate']['subjectPublicKeyInfo']['algorithm']);
+        $this->assertArrayNotHasKey('parameters', $r['tbsCertificate']['subjectPublicKeyInfo']['algorithm']);
         $this->assertSame('id-RSASSA-PSS', $r['signatureAlgorithm']['algorithm']);
         $this->assertArrayHasKey('parameters', $r['signatureAlgorithm']);
     }
@@ -1229,19 +1448,26 @@ itRo91vT68U=
     /**
      * @group github1657
      */
-    public function signWithEncryptedPSS()
+    public function testSignWithEncryptedPSS()
     {
         $private = PublicKeyLoader::load('-----BEGIN ENCRYPTED PRIVATE KEY-----
-MIIBvTBXBgkqhkiG9w0BBQ0wSjApBgkqhkiG9w0BBQwwHAQIpZHwLtkYRb4CAggA
-MAwGCCqGSIb3DQIJBQAwHQYJYIZIAWUDBAECBBCCGsoP7F4bd8O5I1poTn8PBIIB
-YBtM1tgqsAQgbSZT0475aHufzFuJuPWOYqiHag8OUKMeZuxVHndElipEY2V5lS9m
-wddwtWaGuYD/Swcdt0Xht8U8BF0SjSyzQ4YtRsG9CmEHYhWmQ5AqK1W3mDUApO38
-Cm5L1HrHV4YJnYmmK9jgq+iWlLFDmB8s4TA6kMPWbCENlpr1kEXz4hLwY3ylH8XW
-I65WX2jGSn61jayCwpf1HPFBPDUaS5s3f92aKjk0AE8htsDBBiCVS3Yjq4QSbhfz
-uNIZ1TooXT9Xn+EJC0yjVnlTHZMfqrcA3OmVSi4kftugjAax4Z2qDqO+onkgeJAw
-P75scMcwH0SQUdrNrejgfIzJFWzcH9xWwKhOT9s9hLx2OfPlMtDDSJVRspqwwQrF
-QwinX0cR9Hx84rSMrFndxZi52o9EOLJ7cithncoW1KOAf7lIJIUzP0oIKkskAndQ
-o2UiZsxgoMYuq02T07DOknc=
+MIIDHTBXBgkqhkiG9w0BBQ0wSjApBgkqhkiG9w0BBQwwHAQI/ztYS981c5ICAggA
+MAwGCCqGSIb3DQIJBQAwHQYJYIZIAWUDBAECBBDIhjZywtTXKRxXbh8zBPXGBIIC
+wOP3olf5aArfp+0Fl65aTjRDQOb6YTGhpN2c0Of4hTIcKrGgaSeVv2vEUwUz2s4V
+r/xQkK0vtxMvAOgIHy1b0Z/Nm4hyP2tg0TkjzXjrX5Bt0O+WsZKIJHAA15T9zlMl
+96hcev5GldiwLI5IMKiSByecT0N9UPGansngGEZ8fyw/fl0nhsilC76DHRg2IHKm
+eHMkRj9iZvulpeDCvSlDA8tczI9wRryA1ppxWwkvTjWbEbMKrF17Yva7G2lwo6YN
+s4tJ8fh7Dl1kAH4Nl8N5GAOzkJrc0hkvKOAiHWnpfoveLg2I5rh5vGr7IoRJlkot
+zj9i4si1r6/29+u7vA6eYONuDKv9dEHsvko7Z0lRh80vpBR+6qQCqrrIVXFF2sjD
+Qnn/B/tNcZpTOga5ohqWzvqT8pWgw5qHCul+xIowUDScJsGx8akJ2XRHICm9FZLo
+NCaGo+40JDH6647lIBqYmfJ6Vifxq2cMGse14H4lxtpmf7pl8/SnzMHsf3WAj3mG
+rgWXqSLy4YJMstYCo1B1oZze+clTrv/V4FtXoTjzUawOMV+cJYQtU7sz6cbxSKrG
+U82LEHrKMl5BvIPYQOXegTdkkQ92etZEaQ74o2ycHY6PmRwTOLJ1uxgqjXQa9IHE
+I1Zzdx+RLGJoBacqYn20PTl1F1cqItTfJb885lTNh6IzfsYlk1FNM+vu+lA7OFuv
+mKExsRhEvgD2LXsW/5db8diOf34H0K+gimhnC5/TxEzOA8w0Y6+uIJieXzn3lQKu
+CL6PqVQYO3S6DI4uPngGwxauvbnC6lsl2OYBpVyAUl2fprmhhwE2ISSF7cYdA+Qk
+52CTxJj75d7fkutTpSXSj/hz91Gmjv5MDBTti1VLoM7uu9v038Mt6yPq+7mYbxlj
+qL1996ArZnIyIcn+OeOgEriypYL9GUkFdJX1jhEHJuZY
 -----END ENCRYPTED PRIVATE KEY-----', 'demo');
 
         $subject = new X509();
@@ -1253,7 +1479,9 @@ o2UiZsxgoMYuq02T07DOknc=
         $issuer->setDNProp('id-at-organizationName', 'phpseclib CA cert');
 
         $x509 = new X509();
-        $x509->sign($issuer, $subject);
+        $r = $x509->sign($issuer, $subject);
+
+        $this->assertIsArray($r);
     }
 
     /**

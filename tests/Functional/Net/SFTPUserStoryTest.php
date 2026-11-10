@@ -732,6 +732,33 @@ class SFTPUserStoryTest extends PhpseclibFunctionalTestCase
     }
 
     /** @depends testRawlistDisabledStatCache */
+    public function testNlistRecursiveDisabledStatCache($sftp)
+    {
+        $sftp->enableStatCache();
+
+        $list_cache_enabled = $sftp->nlist(self::$scratchDir, true);
+
+        $sftp->clearStatCache();
+
+        $sftp->disableStatCache();
+
+        $list_cache_disabled = $sftp->nlist(self::$scratchDir, true);
+
+        $this->assertContains(
+            'subdir/leaf.txt',
+            $list_cache_disabled,
+            'Failed asserting that recursive nlist() descends into subdirectories with the stat cache disabled'
+        );
+        $this->assertEquals(
+            $list_cache_enabled,
+            $list_cache_disabled,
+            'The files should be the same regardless of stat cache'
+        );
+
+        return $sftp;
+    }
+
+    /** @depends testRawlistDisabledStatCache */
     public function testChownChgrp($sftp)
     {
         $stat = $sftp->stat(self::$scratchDir);
@@ -789,5 +816,26 @@ class SFTPUserStoryTest extends PhpseclibFunctionalTestCase
 
         $sftp->posix_rename('test1.txt', 'test2.txt');
         $this->assertSame('aaaaa', $sftp->get('test2.txt'));
+    }
+
+    /** @depends testSymlink */
+    public function testHardlink($sftp)
+    {
+        $sftp->put('test3.txt', 'abcdefg');
+
+        $this->assertTrue(
+            $sftp->hardlink('test3.txt', 'hardlink'),
+            'Failed asserting that a hardlink could be created'
+        );
+        $this->assertSame(
+            'abcdefg',
+            $sftp->get('hardlink'),
+            'Failed asserting that a hardlink is the same as the original file'
+        );
+        $this->assertSame(
+            $sftp->stat('test3.txt'),
+            $sftp->stat('hardlink'),
+            'Failed asserting that hardlink stat is the same as original file stat'
+        );
     }
 }

@@ -1036,6 +1036,28 @@ IBgv3a3Lyb+IQtT75LE1yjE=
         $this->assertSame($r['saltLength'], $r2['saltLength']);
     }
 
+    public function testPSSOmitParameters()
+    {
+        $rsa = RSA::createKey(512)
+            ->withPadding(RSA::SIGNATURE_PSS)
+            ->withHash('sha256')
+            ->withMGFHash('sha256');
+
+        $private = PSS::load($rsa->toString('PSS'));
+        $privateWithoutParameters = PSS::load($rsa->toString('PSS', ['omitParameters' => true]));
+        $public = PSS::load($rsa->getPublicKey()->toString('PSS'));
+        $publicWithoutParameters = PSS::load($rsa->getPublicKey()->toString('PSS', ['omitParameters' => true]));
+
+        $this->assertSame('sha256', $private['hash']);
+        $this->assertSame('sha256', $private['MGFHash']);
+        $this->assertSame('sha1', $privateWithoutParameters['hash']);
+        $this->assertSame('sha1', $privateWithoutParameters['MGFHash']);
+        $this->assertSame('sha256', $public['hash']);
+        $this->assertSame('sha256', $public['MGFHash']);
+        $this->assertSame('sha1', $publicWithoutParameters['hash']);
+        $this->assertSame('sha1', $publicWithoutParameters['MGFHash']);
+    }
+
     public function testOpenSSHPrivate()
     {
         $key = '-----BEGIN OPENSSH PRIVATE KEY-----
@@ -1565,5 +1587,72 @@ y8m/iELU++SxNcox
         $rsa = PublicKeyLoader::load($key);
         $this->assertInstanceOf(PublicKey::class, $rsa);
         $this->assertSame($rsa->getComment(), 'phpseclib generated key');
+    }
+
+    public function testInvalidVersion()
+    {
+        $key = '-----BEGIN RSA PRIVATE KEY-----
+MIIEpAIBEQKCAQEAubZR/vxN1MmxwDEu5p8IA5kNWlOXhd0U8faIDZGY7h9xs7q7
+Hr6Xd4azC+oXDyS3oOexFvLGkIzzdJI5hJJBh4benU4PXz5W176euXHT+KT4EgV8
++fkFO4KdHFTRo0D+XJCm4iilhx2pAHcBQbTG5vKYQJcYyxZGek9f9jiCsgQlUCj0
+l0Xe3Hyktcum14rPMrZQ8Gv4GGLtoIVqFOh2ftQIY0IoSm+XUulkNfcRmgXMMiCp
+VHdKkx2+vh8asN+drq7bEydBw7XEjhoUJszZVPubUUDBTa7Jp5vpx8jlBhDftInH
+U5mZz8FKx1dlurSuio312Ww940wSQ1saAs9uyQIDAQABAoIBAAmnaNIfWIZtaQrr
+ePDZJzKqA/qEP5YLB5nfwx59c/HmUDlTxYK+zU3pLSk7OoakKyg3Ux/fxU23Xg0w
+cBgBqFwSDpl7zisZKQI0cQ4v1MvnUNP9qrZYk8U5BXohuKIgG05Bi23/R0I5Bajg
+sX/dFL07CDTMsKfCA9jmLmq0xlUtm3d4R8h050OsFZQqIYFrsXeRkhXuI1Bk+wp7
+O6qvrBSS4psvyA3Ba2M1Jdg+7XP6R6VamJQUilA1jrlMYrGehPPX2vhmzWpgaSDV
+S6QdeqZI53fVJp/gCxKoz1zPgj9iwejcRC7Dp+M1aRP0RJGbqkpccpk0WBdUO0rd
+X5waR38CgYEA+DN/vNS1ThTUImiJcl2dxxPkDIfmLOGIalF8cps9Ez3FGb+wJggX
+iFCdK1A7wJZr3GfEV3HkH5hEzuG+losyY3NdbEfZgdrP3h/iEQxKy/5lZZmJC48T
+HCDSRokZWfRdBtT63yBflPnqBQxmHv3HYNdHGhljvxYzODfvbcT4268CgYEAv4wq
+1UrPZ/i2h4SfkezkdhkB6KvIsLyGBPVeZK1BOmIC27KOrARj+HgRwcqCaw7q+1PR
+FbUN5ad190xenPgWG/wDD15AJmQ4jqHvfQrehVWeTmjO9RnLT1guxB+ZQknYuGCn
+Qz8GEjIoJ6h7PMDXhQdYEbdrzLyQ/xU6EVkvowcCgYEA4M3MUd0bBkjJRw0GCOcQ
+BANZF5xzd40jAKEjpa5DqEzXXBYJ1riXj+jsIhH+vNXBhhUaedV3OMKy9+rxs+sJ
+zZftMyj0sa/dfKPGH4jRqmiVsGta/HQva9eyfR6qLpatN4XqX/QzfnzJYJ81U7aq
+QmVaSiJa/PV/mNjY7MRuXpMCgYEAkErtpVlCnocMMVAlyI6Ul6ZE+toVR5Xsu2V/
+YwXkwi89CfUbZtez22PPtJVx42YMe6FrOxf1zQ92XQGJsGNufEw+neAZIRKUTFYO
+i7qZYAXcSCLJ7Hcu4amDKTjIgdgRSut8dLrQPvrLpvxTQbPfZpXesRHkQgm2jIGY
+CaOOsBcCgYA3ijrhl4w4Hc47SGsDhgHPBt+ndof9zS1WcyOAv/TzLuwgAnA0vNU7
+6AFi5AVKt/79vD5f6SOqgTDSyasB1qcP2jYV8GaIbqYQ4Gwpz1wuBkmkDKk28pC3
+ec2eK8O4cJUmZn91oQFuJorjuVAa5GluyMGvCdxWeAQVH96xSG7lEg==
+-----END RSA PRIVATE KEY-----';
+        $this->expectException(NoKeyLoadedException::class);
+        PublicKeyLoader::load($key);
+    }
+
+    public function testLargeRoundsKey()
+    {
+        $this->expectException(NoKeyLoadedException::class);
+        PublicKeyLoader::load('-----BEGIN ENCRYPTED PRIVATE KEY-----
+MIIE7zAhBgkqhkiG9w0BBQMwFAQIGNQGqHa0TZYCCH//////////BIIEyMoyWAZw
+Mou7cqlo9+XY7Mu5n1TZ43/C7xpK2U6+hnylg7mOdroNQMqEsb/72CGvnbzt98tX
+iTz/rXTVuixW2BhuNtqEUhtwvIT2ej2t1xj8HaJm4qfzZ8PS8KWjzQi3yvdE3Ul9
+nBTFcTNPCv+wJJ/HNFYPa8ip0QqNQh/cHaODE7ekSz1DBuFd9JvfpetMERwp4I1I
+70AcYl352NjFlUXmdJvzbFz4b3Bfm4RYtvFN0SN6/FHYdc3gRj+MdCmC9CKmScTt
+UVuhHlGTutUW7iH9pZkBmrQOWad8YjSA/TZPt0asv9kCZ89qGuhOMxWbVAYMevE3
+r0vKnDjxSBhPyCLj71qt+LbSH6DrlelqJTkNeFHlycccpD60kvJXtVvj6gzVJDo6
+gkQO8AdGSgc32N5JaRSl7HPu3kAo7ddHUoyF7ib91b9e44eqKVG2ZAY6ZqmGTWez
+I0/W/H0LzgvJQVKyVEgv0RsWPwqBK2PSSZ07z42a0Rtvzg5Zt/IpP+YclhO6jLsV
+sMwDiXGNVKNX+hVs0xzk8EYp9G2fWmjBs2xjLN/LXXzhcKyeCcReNTDjd+Ulwm7K
+fP6rVO3oSrhlY9ntUjCAfGSEutdcniPz6gbZZqNKQeyvsqXe0sQiRaVO5KVsLKSh
+sOxCJvXL2zI5whLlWX3rRb62SlfB1UFcnv40xsDLph4sekyM41hdA/cqobz1ndif
+bBNeWyyrSYiasPztmsDp5DoFKmgbhrKPm+p3OJXqTpA2Jmp5AJzbIcfbgsR2C5/x
+N/TuhJoygVeMqhXZF9DF7ybwtrIpWfbUlYcL7cNKIBL0+zS+LyPHUQv6scibSFog
+1Fu0dwz16ChTAze9193IGnTyT4uuPAuSFP6JlXZPTVemLH7pdyDi0IC1koWILlBb
++U4++94NaekPfGsKRWepL4RPSb5n1JTpECk/azL7wvE83rZJvq9hYuSgCNGLKvHA
+K5dHUlsAaR5mSKBVzrMtZCkod+K1kkqNEk8f3P21yG5ivdWoZRd4+Gvw5lo8aMd2
+jodCi+N5kuODp73Rx3GTrQm2LNuF/ejt0gZt+5i9MDDmT1v6vFHN0IpYHUuqMzSJ
+jOJ0EeIuPMF0vgTqizjDcf+oTZlActm1xTCxzSNgjxr6MekJSTmicIAxorlxHMy1
+sNBfCVhzO3iZed3bKOR6g3M5rEcQU2v768H0BYEB/qvQxZwjNUTw5zfJ9BPWYnaW
+DL/U1giBKe7Y0hF5JXEUpS9uiP1adIDjNbo94jD1sH3Fzz8QcW3TvMB8A79xyhml
+1W2n2UdhAc1JAiA/ho44AnASis68BkRUHG4TNDOvIbAzQAmAj4SLJ5DsG1zf7yTo
+v4K26TViTi7TlZy4AvpL3IIKtgtKEjZuvrDBygY7PFGA/LgJJg5MF1yla7B1w0rm
+hsaKZ9XMVsXVcwUH6dm7K3CX2iAlc0uQd6+WhjnukIEfoKcjHhqIYD9/2eGUKCmx
+D/lkmuBsn+WpEg1qkzhiWz/nMhjPXt3HCv8tMYdt0FI7gP7hhlQ1KlAgEnvM17rW
+ckL9SmrZMjBFy018kLDOuh7N5rcxFpuX7VVkCj1Q4PX1FbuDBZAq03Ngd59LG8j/
+jTzMU4Qamw1/CyFh8p4vdWEAsg==
+-----END ENCRYPTED PRIVATE KEY-----', 'password');
     }
 }
