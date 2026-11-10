@@ -234,6 +234,13 @@ class X509
     private $extensionValues = [];
 
     /**
+     * Extensions queued for inclusion when signing a new certificate.
+     *
+     * @var list<array{id: string, value: mixed, critical: bool}>
+     */
+    private $pendingExtensions = [];
+
+    /**
      * OIDs loaded
      *
      * @var bool
@@ -1508,6 +1515,19 @@ class X509
         switch ($publicKeyAlgorithm) {
             case 'id-RSASSA-PSS':
                 $key = RSA::loadFormat('PSS', $publicKey);
+                if ($signatureAlgorithm == 'id-RSASSA-PSS' && isset($this->currentCert['signatureAlgorithm']['parameters'])) {
+                    // the public key may omit the PSS parameters (omitParameters option), so use
+                    // the signatureAlgorithm parameters for verification (RFC 4055)
+                    $params = $this->decodePSSParams($this->currentCert['signatureAlgorithm']['parameters']);
+                    if ($params !== false) {
+                        $key = $key
+                            ->withHash($params['hash'])
+                            ->withMGFHash($params['MGFHash']);
+                        if (isset($params['saltLength'])) {
+                            $key = $key->withSaltLength($params['saltLength']);
+                        }
+                    }
+                }
                 break;
             case 'rsaEncryption':
                 $key = RSA::loadFormat('PKCS8', $publicKey);
@@ -1566,6 +1586,68 @@ class X509
         }
 
         return $key->verify($signatureSubject, $signature);
+    }
+
+    /**
+     * Decodes the parameters of an RSASSA-PSS signature algorithm identifier
+     *
+     * Returns the hash, MGF hash and salt length in the same form as PSS::load()
+     *
+     * @param Element|string $parameters
+     * @return array|false
+     */
+    private function decodePSSParams($parameters)
+    {
+        if (!($parameters instanceof Element) && !is_string($parameters)) {
+            return false;
+        }
+
+        ASN1::loadOIDs([
+            'id-sha1' => '1.3.14.3.2.26',
+            'id-sha256' => '2.16.840.1.101.3.4.2.1',
+            'id-sha384' => '2.16.840.1.101.3.4.2.2',
+            'id-sha512' => '2.16.840.1.101.3.4.2.3',
+            'id-sha224' => '2.16.840.1.101.3.4.2.4',
+            'id-sha512/224' => '2.16.840.1.101.3.4.2.5',
+            'id-sha512/256' => '2.16.840.1.101.3.4.2.6',
+            'id-mgf1' => '1.2.840.113549.1.1.8'
+        ]);
+
+        $decoded = ASN1::decodeBER($parameters);
+        if (!$decoded) {
+            return false;
+        }
+        $params = ASN1::asn1map($decoded[0], Maps\RSASSA_PSS_params::MAP);
+        if (!is_array($params)) {
+            return false;
+        }
+
+        if (isset($params['maskGenAlgorithm']['parameters'])) {
+            $decoded = ASN1::decodeBER($params['maskGenAlgorithm']['parameters']);
+            if (!$decoded) {
+                return false;
+            }
+            $params['maskGenAlgorithm']['parameters'] = ASN1::asn1map($decoded[0], Maps\HashAlgorithm::MAP);
+        } else {
+            $params['maskGenAlgorithm'] = [
+                'algorithm' => 'id-mgf1',
+                'parameters' => ['algorithm' => 'id-sha1']
+            ];
+        }
+
+        if (!isset($params['hashAlgorithm']['algorithm'])) {
+            $params['hashAlgorithm']['algorithm'] = 'id-sha1';
+        }
+
+        $result = [
+            'hash' => str_replace('id-', '', $params['hashAlgorithm']['algorithm']),
+            'MGFHash' => str_replace('id-', '', $params['maskGenAlgorithm']['parameters']['algorithm'])
+        ];
+        if (isset($params['saltLength'])) {
+            $result['saltLength'] = (int) "$params[saltLength]";
+        }
+
+        return $result;
     }
 
     /**
@@ -2774,6 +2856,10 @@ class X509
 
         $this->currentCert['tbsCertificate']['issuer'] = $issuer->dn;
 
+        if (isset($subject->currentKeyIdentifier)) {
+            $this->setExtension('id-ce-subjectKeyIdentifier', $subject->currentKeyIdentifier);
+        }
+
         if (isset($issuer->currentKeyIdentifier)) {
             $this->setExtension('id-ce-authorityKeyIdentifier', [
                     //'authorityCertIssuer' => array(
@@ -2790,9 +2876,10 @@ class X509
             //unset($extensions);
         }
 
-        if (isset($subject->currentKeyIdentifier)) {
-            $this->setExtension('id-ce-subjectKeyIdentifier', $subject->currentKeyIdentifier);
+        foreach ($this->pendingExtensions as $extension) {
+            $this->setExtension($extension['id'], $extension['value'], $extension['critical']);
         }
+        $this->pendingExtensions = [];
 
         $altName = [];
 
@@ -3232,6 +3319,18 @@ class X509
     public function makeCA()
     {
         $this->caFlag = true;
+    }
+
+    /**
+     * Queue an extension to be included when signing a new certificate.
+     *
+     * @param string $id
+     * @param mixed $value
+     * @param bool $critical
+     */
+    public function queueExtension($id, $value, $critical = false)
+    {
+        $this->pendingExtensions[] = ['id' => $id, 'value' => $value, 'critical' => $critical];
     }
 
     /**
@@ -3861,7 +3960,9 @@ class X509
             'PSS' :
             'PKCS8';
 
-        $publicKey = base64_decode(preg_replace('#-.+-|[\r\n]#', '', $this->publicKey->toString($format)));
+        $options = $format === 'PSS' ? ['omitParameters' => true] : [];
+
+        $publicKey = base64_decode(preg_replace('#-.+-|[\r\n]#', '', $this->publicKey->toString($format, $options)));
 
         $decoded = ASN1::decodeBER($publicKey);
         if (!$decoded) {
@@ -3872,7 +3973,7 @@ class X509
             return false;
         }
 
-        $mapped['subjectPublicKey'] = $this->publicKey->toString($format);
+        $mapped['subjectPublicKey'] = $this->publicKey->toString($format, $options);
 
         return $mapped;
     }

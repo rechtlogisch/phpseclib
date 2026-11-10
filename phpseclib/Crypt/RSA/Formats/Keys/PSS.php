@@ -200,6 +200,10 @@ abstract class PSS extends Progenitor
      */
     public static function savePSSParams(array $options)
     {
+        if (!empty($options['omitParameters'])) {
+            return false;
+        }
+
         /*
          The trailerField field is an integer.  It provides
          compatibility with IEEE Std 1363a-2004 [P1363A].  The value
@@ -215,9 +219,7 @@ abstract class PSS extends Progenitor
 
          source: https://tools.ietf.org/html/rfc4055#page-9
         */
-        $params = [
-            'trailerField' => new BigInteger(1)
-        ];
+        $params = [];
         if (isset($options['hash'])) {
             $params['hashAlgorithm']['algorithm'] = 'id-' . $options['hash'];
         }

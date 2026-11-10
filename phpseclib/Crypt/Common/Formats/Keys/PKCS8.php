@@ -566,7 +566,9 @@ abstract class PKCS8 extends PKCS
             'privateKey' => $key
         ];
         if ($oid != 'id-Ed25519' && $oid != 'id-Ed448' && $oid != 'id-X25519' && $oid != 'id-X448') {
-            $key['privateKeyAlgorithm']['parameters'] = $params;
+            if ($params !== false) {
+                $key['privateKeyAlgorithm']['parameters'] = $params;
+            }
         }
         if (!empty($attr)) {
             $key['attributes'] = $attr;
@@ -683,7 +685,9 @@ abstract class PKCS8 extends PKCS
         ];
 
         if ($oid != 'id-Ed25519' && $oid != 'id-Ed448' && $oid != 'id-X25519' && $oid != 'id-X448') {
-            $key['publicKeyAlgorithm']['parameters'] = $params;
+            if ($params !== false) {
+                $key['publicKeyAlgorithm']['parameters'] = $params;
+            }
         }
 
         $key = ASN1::encodeDER($key, Maps\PublicKeyInfo::MAP);
